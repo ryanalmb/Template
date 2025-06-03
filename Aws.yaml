@@ -514,6 +514,315 @@ Resources:
               import urllib3
               
               http = urllib3.PoolManager()
+# Enhanced Lambda Execution Role with proper dependencies and permissions
+  LambdaExecutionRoleV2:
+    Type: AWS::IAM::Role
+    Properties:
+      # Remove hardcoded name to avoid conflicts
+      # RoleName: !Sub LambdaExecutionRole-${Environment}-${AWS::AccountId}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !GetAtt SportsDatasetBucket.Arn
+                  - !Sub "${SportsDatasetBucket.Arn}/*"
+                  - !GetAtt PredictionResultsBucket.Arn
+                  - !Sub "${PredictionResultsBucket.Arn}/*"
+                  - !GetAtt ModelArtifactsBucket.Arn
+                  - !Sub "${ModelArtifactsBucket.Arn}/*"
+
+        - PolicyName: DynamoDBAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource:
+                  - !GetAtt UserPreferencesTable.Arn
+                  - !GetAtt PredictionHistoryTable.Arn
+                  - !Sub "${UserPreferencesTable.Arn}/index/*"
+                  - !Sub "${PredictionHistoryTable.Arn}/index/*"
+
+        - PolicyName: SecretsManagerAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource:
+                  - !Ref TelegramBotSecret
+                  - !Ref KaggleAPISecret
+                  - !Ref GitHubTokenSecret
+
+        - PolicyName: BedrockAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListFoundationModels
+                Resource: '*'
+
+        - PolicyName: SageMakerAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sagemaker:InvokeEndpoint
+                  - sagemaker:DescribeEndpoint
+                  - sagemaker:DescribeEndpointConfig
+                  - sagemaker:DescribeModel
+                Resource: 
+                  - !Sub "arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint/*"
+                  - !Sub "arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint-config/*"
+                  - !Sub "arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:model/*"
+
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: '*'
+
+  ### Lambda Functions ###
+  TelegramBotLambda:
+    Type: AWS::Lambda::Function
+    # Add explicit dependency on the role
+    DependsOn: LambdaExecutionRoleV2
+    Properties:
+      FunctionName: !Sub TelegramPredictionBot-${Environment}
+      Runtime: python3.11
+      Role: !GetAtt LambdaExecutionRoleV2.Arn
+      Handler: lambda_function.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from datetime import datetime
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              """Telegram Bot Handler with Bedrock Claude Integration"""
+              try:
+                  logger.info(f"Received event: {json.dumps(event)}")
+                  
+                  # Initialize clients
+                  secrets_client = boto3.client('secretsmanager')
+                  bedrock_client = boto3.client('bedrock-runtime')
+                  
+                  # Get bot token from secrets manager
+                  try:
+                      bot_secret = secrets_client.get_secret_value(
+                          SecretId=f"{os.environ['ENVIRONMENT']}-telegram-bot-token"
+                      )
+                      bot_token = json.loads(bot_secret['SecretString'])['token']
+                  except Exception as e:
+                      logger.error(f"Error getting bot token: {str(e)}")
+                      return {'statusCode': 500, 'body': json.dumps({'error': 'Token retrieval failed'})}
+
+                  # Handle webhook verification
+                  if 'body' not in event:
+                      return {'statusCode': 200, 'body': json.dumps({'status': 'webhook verified'})}
+
+                  body = json.loads(event['body'])
+                  logger.info(f"Telegram update: {json.dumps(body)}")
+
+                  if 'message' in body:
+                      chat_id = body['message']['chat']['id']
+                      message_text = body['message'].get('text', '')
+                      user_id = str(body['message']['from']['id'])
+
+                      response_text = handle_command(message_text, user_id, chat_id, bedrock_client)
+                      send_message(bot_token, chat_id, response_text)
+
+                  return {'statusCode': 200, 'body': json.dumps({'status': 'success'})}
+
+              except Exception as e:
+                  logger.error(f"Lambda handler error: {str(e)}")
+                  return {'statusCode': 500, 'body': json.dumps({'error': str(e)})}
+
+          def handle_command(message_text, user_id, chat_id, bedrock_client):
+              """Handle bot commands with Bedrock Claude analysis"""
+
+              if message_text.startswith('/predict'):
+                  return handle_prediction_with_bedrock(message_text, user_id, bedrock_client)
+              elif message_text.startswith('/analysis'):
+                  return handle_analysis_with_bedrock(message_text, user_id, bedrock_client)
+              elif message_text.startswith('/start'):
+                  return get_welcome_message()
+              else:
+                  return "Use /predict [sport] [team1] vs [team2] for predictions or /start for help"
+
+          def handle_prediction_with_bedrock(message_text, user_id, bedrock_client):
+              """Generate prediction using ensemble models + Bedrock Claude"""
+              try:
+                  # Parse prediction request
+                  parts = message_text.split()
+                  if len(parts) < 5:
+                      return "Format: /predict [sport] [team1] vs [team2]"
+
+                  sport = parts[1]
+                  teams_text = ' '.join(parts[2:])
+                  
+                  if ' vs ' not in teams_text.lower():
+                      return "Use format: /predict sport Team1 vs Team2"
+                  
+                  teams = teams_text.split(' vs ')
+                  if len(teams) != 2:
+                      teams = teams_text.split(' VS ')
+                  
+                  if len(teams) != 2:
+                      return "Use format: Team1 vs Team2"
+
+                  # Get ensemble prediction (simulate for demo)
+                  ensemble_result = get_ensemble_prediction(sport, teams[0].strip(), teams[1].strip())
+
+                  # Generate contextual analysis with Bedrock Claude
+                  claude_analysis = generate_bedrock_analysis(sport, teams, ensemble_result, bedrock_client)
+
+                  return f"{sport.upper()} PREDICTION\n\n{teams[0].strip()} vs {teams[1].strip()}\n\n{claude_analysis}"
+
+              except Exception as e:
+                  logger.error(f"Prediction error: {str(e)}")
+                  return f"Error generating prediction: {str(e)}"
+
+          def generate_bedrock_analysis(sport, teams, prediction_data, bedrock_client):
+              """Generate analysis using Amazon Bedrock Claude"""
+              try:
+                  prompt = f"""Analyze this {sport} match prediction:
+          Teams: {teams[0]} vs {teams[1]}
+          Model Predictions: Winner - {prediction_data['winner']}, Confidence - {prediction_data['confidence']:.1%}
+
+          Provide a concise analysis covering:
+          1. Predicted outcome and confidence level
+          2. Key factors that could influence the match
+          3. Brief tactical insights
+
+          Keep response under 400 characters for Telegram formatting."""
+
+                  body = {
+                      "anthropic_version": "bedrock-2023-05-31",
+                      "max_tokens": 250,
+                      "messages": [
+                          {
+                              "role": "user",
+                              "content": prompt
+                          }
+                      ]
+                  }
+
+                  response = bedrock_client.invoke_model(
+                      modelId='anthropic.claude-3-haiku-20240307-v1:0',
+                      body=json.dumps(body)
+                  )
+
+                  result = json.loads(response['body'].read())
+                  return result['content'][0]['text']
+
+              except Exception as e:
+                  logger.error(f"Bedrock error: {str(e)}")
+                  return f"Prediction: {prediction_data['winner']} ({prediction_data['confidence']:.1%} confidence)\n\nClaude analysis temporarily unavailable."
+
+          def get_ensemble_prediction(sport, team1, team2):
+              """Simulate ensemble model prediction"""
+              import random
+              winner = random.choice([team1, team2])
+              confidence = random.uniform(0.6, 0.9)
+              return {
+                  'winner': winner,
+                  'confidence': confidence,
+                  'models': {
+                      'tensorflow': confidence + random.uniform(-0.1, 0.1),
+                      'pytorch': confidence + random.uniform(-0.1, 0.1),
+                      'lightgbm': confidence + random.uniform(-0.1, 0.1),
+                      'xgboost': confidence + random.uniform(-0.1, 0.1)
+                  }
+              }
+
+          def handle_analysis_with_bedrock(message_text, user_id, bedrock_client):
+              """Generate detailed match analysis with Bedrock"""
+              analysis_query = message_text[10:].strip()
+              if not analysis_query:
+                  return "Please provide match details after /analysis command"
+              
+              try:
+                  prompt = f"Provide detailed sports analysis for: {analysis_query}. Include tactical insights, key player matchups, and strategic considerations. Keep under 500 characters."
+
+                  body = {
+                      "anthropic_version": "bedrock-2023-05-31",
+                      "max_tokens": 350,
+                      "messages": [{"role": "user", "content": prompt}]
+                  }
+
+                  response = bedrock_client.invoke_model(
+                      modelId='anthropic.claude-3-haiku-20240307-v1:0',
+                      body=json.dumps(body)
+                  )
+
+                  result = json.loads(response['body'].read())
+                  return result['content'][0]['text']
+
+              except Exception as e:
+                  logger.error(f"Analysis error: {str(e)}")
+                  return f"Analysis unavailable: {str(e)}"
+
+          def get_welcome_message():
+              return """🤖 Multi-Sport AI Prediction Bot
+
+          Commands:
+          🔮 /predict [sport] [team1] vs [team2] - AI prediction with Claude analysis
+          📊 /analysis [match details] - Detailed match analysis
+
+          Example: /predict football Arsenal vs Chelsea
+
+          Powered by 4-model ensemble + Amazon Bedrock Claude"""
+
+          def send_message(bot_token, chat_id, text):
+              """Send message to Telegram"""
+              import urllib3
+              
+              http = urllib3.PoolManager()
               url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
               
               data = {
@@ -537,7 +846,7 @@ Resources:
           RESULTS_BUCKET: !Ref PredictionResultsBucket
           USER_TABLE: !Ref UserPreferencesTable
           HISTORY_TABLE: !Ref PredictionHistoryTable
-
+  
   ModelEnsembleLambda:
     Type: AWS::Lambda::Function
     DependsOn: 
