@@ -529,7 +529,7 @@ TelegramBotLambda:
           RESULTS_BUCKET: !Ref PredictionResultsBucket
           USER_TABLE: !Ref UserPreferencesTable
           HISTORY_TABLE: !Ref PredictionHistoryTable
-  ModelEnsembleLambda:
+ModelEnsembleLambda:
     Type: AWS::Lambda::Function
     DependsOn: 
       - LambdaExecutionRoleV2
@@ -631,9 +631,7 @@ TelegramBotLambda:
       MemorySize: 1024
       Environment:
         Variables:
-          ENVIRONMENT: !Ref Environment
-
-  ### SageMaker Endpoints (Conditional) ###
+          ENVIRONMENT: !Ref Environment ### SageMaker Endpoints (Conditional) ###
   TensorFlowModel:
     Type: AWS::SageMaker::Model
     Condition: ShouldDeployModels
