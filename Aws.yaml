@@ -499,11 +499,11 @@ Resources:
                   return f"Analysis unavailable: {str(e)}"
 
           def get_welcome_message():
-              return """ðŸ† Multi-Sport AI Prediction Bot
+              return Multi-Sport AI Prediction Bot
 
           Commands:
-          â€¢ /predict [sport] [team1] vs [team2] - AI prediction with Claude analysis
-          â€¢ /analysis [match details] - Detailed match analysis
+           /predict [sport] [team1] vs [team2] - AI prediction with Claude analysis
+           /analysis [match details] - Detailed match analysis
 
           Example: /predict football Arsenal vs Chelsea
 
