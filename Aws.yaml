@@ -499,7 +499,7 @@ Resources:
                   return f"Analysis unavailable: {str(e)}"
 
           def get_welcome_message():
-              return Multi-Sport AI Prediction Bot
+              return """Multi-Sport AI Prediction Bot
 
           Commands:
            /predict [sport] [team1] vs [team2] - AI prediction with Claude analysis
@@ -507,7 +507,7 @@ Resources:
 
           Example: /predict football Arsenal vs Chelsea
 
-          Powered by 4-model ensemble + Amazon Bedrock Claude ðŸ¤–"""
+          Powered by 4-model ensemble + Amazon Bedrock Claude"""
 
           def send_message(bot_token, chat_id, text):
               """Send message to Telegram"""
