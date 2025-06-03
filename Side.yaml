@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Minimal Multi-Sport AI Test Template'
+
+Parameters:
+  TelegramBotToken:
+    Type: String
+    NoEcho: true
+    Description: Telegram Bot API token
+  
+  Environment:
+    Type: String
+    Default: dev
+    Description: Deployment environment
+
+Resources:
+  # Secrets Manager for Telegram Bot Token
+  TelegramBotSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${Environment}-telegram-bot-token
+      Description: Telegram Bot API token
+      SecretString: !Sub |
+        {
+          "token": "${TelegramBotToken}"
+        }
+
+  # S3 Bucket for datasets
+  SportsDatasetBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub multisport-ai-datasets-${Environment}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Simple Lambda execution role
+  SimpleLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref TelegramBotSecret
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+
+  # Simple Lambda function
+  TestLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub TelegramBot-Test-${Environment}
+      Runtime: python3.11
+      Role: !GetAtt SimpleLambdaRole.Arn
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Hello from Multi-Sport AI Bot!')
+              }
+      Timeout: 30
+      MemorySize: 256
+
+Outputs:
+  LambdaArn:
+    Description: Lambda function ARN
+    Value: !GetAtt TestLambda.Arn
+  
+  BucketName:
+    Description: S3 bucket name
+    Value: !Ref SportsDatasetBucket
