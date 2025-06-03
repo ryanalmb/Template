@@ -529,7 +529,6 @@ TelegramBotLambda:
           RESULTS_BUCKET: !Ref PredictionResultsBucket
           USER_TABLE: !Ref UserPreferencesTable
           HISTORY_TABLE: !Ref PredictionHistoryTable
-  
   ModelEnsembleLambda:
     Type: AWS::Lambda::Function
     DependsOn: 
