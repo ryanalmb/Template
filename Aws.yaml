@@ -1,819 +1,121 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Enhanced Multi-Sport AI Prediction Engine with 4-Model Ensemble (TensorFlow, PyTorch, LightGBM, XGBoost), Amazon Bedrock Claude Integration, Multimodal Analysis, and Comprehensive Telegram Bot'
 
-Parameters:
-  KaggleAPIKey:
-    Type: String
-    NoEcho: true
-    Description: Kaggle API key for dataset ingestion
-    
-  GitHubToken:
-    Type: String
-    NoEcho: true
-    Description: GitHub Personal Access Token for repository access
-    
-  TelegramBotToken:
-    Type: String
-    NoEcho: true
-    Description: Telegram Bot API token
-    
-  KeyPairName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: EC2 Key Pair for SSH access
-    
-  Environment:
-    Type: String
-    Default: dev
-    AllowedValues: [dev, staging, prod]
-    Description: Deployment environment
+AWSTemplateFormatVersion: '2010-09-09' Description: Multimodal Sports Analysis Bot with Bedrock Claude, Rekognition, Comprehend, and Telegram Integration
+
+Parameters: TelegramBotToken: Type: String NoEcho: true Description: Telegram Bot API Token
+
+Environment: Type: String Default: dev AllowedValues: [dev, prod] Description: Deployment environment
 
 Resources:
 
-  ### Secrets Manager for API Keys ###
-  KaggleAPISecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub ${Environment}-kaggle-api-key
-      Description: Kaggle API credentials
-      SecretString: !Sub |
-        {
-          "username": "kaggle-user",
-          "key": "${KaggleAPIKey}"
-        }
+DynamoDB
 
-  GitHubTokenSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub ${Environment}-github-token
-      Description: GitHub Personal Access Token
-      SecretString: !Sub |
-        {
-          "token": "${GitHubToken}"
-        }
+SportsAnalysisTable: Type: AWS::DynamoDB::Table Properties: TableName: !Sub sports-analysis-${Environment} BillingMode: PAY_PER_REQUEST AttributeDefinitions: - AttributeName: match_id AttributeType: S KeySchema: - AttributeName: match_id KeyType: HASH
 
-  TelegramBotSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub ${Environment}-telegram-bot-token
-      Description: Telegram Bot API token
-      SecretString: !Sub |
-        {
-          "token": "${TelegramBotToken}"
-        }
+Secrets Manager
 
-  ### S3 Buckets ###
-  SportsDatasetBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub multisport-ai-datasets-${Environment}-${AWS::AccountId}
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+TelegramBotSecret: Type: AWS::SecretsManager::Secret Properties: Name: !Sub ${Environment}-telegram-token SecretString: !Sub | { "token": "${TelegramBotToken}" }
 
-  ModelArtifactsBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub multisport-ai-models-${Environment}-${AWS::AccountId}
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+IAM Role
 
-  PredictionResultsBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub multisport-ai-results-${Environment}-${AWS::AccountId}
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+AnalysisLambdaRole: Type: AWS::IAM::Role Properties: RoleName: !Sub LLMAnalysisLambdaRole-${Environment} AssumeRolePolicyDocument: Version: '2012-10-17' Statement: - Effect: Allow Principal: Service: lambda.amazonaws.com Action: sts:AssumeRole ManagedPolicyArns: - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole Policies: - PolicyName: MultimodalAccess PolicyDocument: Version: '2012-10-17' Statement: - Effect: Allow Action: - bedrock:InvokeModel - bedrock:InvokeModelWithResponseStream - comprehend:DetectEntities - comprehend:DetectSentiment - rekognition:DetectLabels Resource: '*' - Effect: Allow Action: - dynamodb:PutItem Resource: !GetAtt SportsAnalysisTable.Arn - Effect: Allow Action: - secretsmanager:GetSecretValue Resource: !Ref TelegramBotSecret
 
-  ### DynamoDB Tables ###
-  UserPreferencesTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub multisport-user-preferences-${Environment}
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: user_id
-          AttributeType: S
-        - AttributeName: sport
-          AttributeType: S
-      KeySchema:
-        - AttributeName: user_id
-          KeyType: HASH
-        - AttributeName: sport
-          KeyType: RANGE
+Lambda Function
 
-  PredictionHistoryTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub multisport-prediction-history-${Environment}
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: prediction_id
-          AttributeType: S
-        - AttributeName: timestamp
-          AttributeType: N
-      KeySchema:
-        - AttributeName: prediction_id
-          KeyType: HASH
-        - AttributeName: timestamp
-          KeyType: RANGE
+TelegramAnalysisBot: Type: AWS::Lambda::Function Properties: FunctionName: !Sub TelegramSportsBot-${Environment} Runtime: python3.11 Role: !GetAtt AnalysisLambdaRole.Arn Handler: index.lambda_handler Timeout: 30 MemorySize: 512 Environment: Variables: ENVIRONMENT: !Ref Environment TABLE_NAME: !Ref SportsAnalysisTable TELEGRAM_SECRET: !Ref TelegramBotSecret Code: ZipFile: | import json, boto3, os, uuid, requests from base64 import b64decode
 
-### Enhanced IAM Roles ###
-  SageMakerExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub SageMakerExecutionRole-${Environment}
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: sagemaker.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
-      Policies:
-        # S3 Access for model artifacts and datasets
-        - PolicyName: S3AccessPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                  - s3:GetBucketLocation
-                Resource:
-                  - !Sub ${SportsDatasetBucket}/*
-                  - !GetAtt SportsDatasetBucket.Arn
-                  - !Sub ${ModelArtifactsBucket}/*
-                  - !GetAtt ModelArtifactsBucket.Arn
-                  - !Sub ${PredictionResultsBucket}/*
-                  - !GetAtt PredictionResultsBucket.Arn
-        
-        # ECR Access for container images
-        - PolicyName: ECRAccessPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ecr:GetDownloadUrlForLayer
-                  - ecr:BatchGetImage
-                  - ecr:BatchCheckLayerAvailability
-                  - ecr:GetAuthorizationToken
-                  - ecr:DescribeRepositories
-                  - ecr:DescribeImages
-                Resource: '*'
-        
-        # CloudWatch Logs for model endpoints
-        - PolicyName: CloudWatchLogsPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
-                Resource: 
-                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*
-                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*:*
-        
-        # CloudWatch Metrics for monitoring
-        - PolicyName: CloudWatchMetricsPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - cloudwatch:PutMetricData
-                  - cloudwatch:GetMetricStatistics
-                  - cloudwatch:ListMetrics
-                Resource: '*'
-        
-        # VPC Access (if needed for private deployments)
-        - PolicyName: VPCAccessPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ec2:CreateNetworkInterface
-                  - ec2:CreateNetworkInterfacePermission
-                  - ec2:DeleteNetworkInterface
-                  - ec2:DeleteNetworkInterfacePermission
-                  - ec2:DescribeNetworkInterfaces
-                  - ec2:DescribeVpcs
-                  - ec2:DescribeDhcpOptions
-                  - ec2:DescribeSubnets
-                  - ec2:DescribeSecurityGroups
-                Resource: '*'
-        
-        # KMS Access for encryption (if using encrypted resources)
-        - PolicyName: KMSAccessPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                  - kms:GenerateDataKey
-                  - kms:CreateGrant
-                  - kms:DescribeKey
-                Resource: 
-                  - !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*
-        
-        # Bedrock Access for AI integration
-        - PolicyName: BedrockAccessPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                  - bedrock:GetFoundationModel
-                  - bedrock:ListFoundationModels
-                Resource: 
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-instant-v1
+bedrock = boto3.client('bedrock-runtime')
+      comprehend = boto3.client('comprehend')
+      rekognition = boto3.client('rekognition')
+      dynamodb = boto3.resource('dynamodb')
+      secrets = boto3.client('secretsmanager')
 
-  # Enhanced Lambda Execution Role with additional permissions
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub LambdaTelegramBotRole-${Environment}
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-      Policies:
-        - PolicyName: MultiSportBotPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              # S3 Access
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:ListBucket
-                  - s3:DeleteObject
-                Resource:
-                  - !Sub ${SportsDatasetBucket}/*
-                  - !GetAtt SportsDatasetBucket.Arn
-                  - !Sub ${PredictionResultsBucket}/*
-                  - !GetAtt PredictionResultsBucket.Arn
-                  - !Sub ${ModelArtifactsBucket}/*
-                  - !GetAtt ModelArtifactsBucket.Arn
-              
-              # DynamoDB Access
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                  - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:BatchGetItem
-                  - dynamodb:BatchWriteItem
-                Resource:
-                  - !GetAtt UserPreferencesTable.Arn
-                  - !GetAtt PredictionHistoryTable.Arn
-                  - !Sub ${UserPreferencesTable.Arn}/index/*
-                  - !Sub ${PredictionHistoryTable.Arn}/index/*
-              
-              # Secrets Manager Access
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:DescribeSecret
-                Resource:
-                  - !Ref TelegramBotSecret
-                  - !Ref KaggleAPISecret
-                  - !Ref GitHubTokenSecret
-              
-              # Bedrock Access
-              - Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                  - bedrock:GetFoundationModel
-                  - bedrock:ListFoundationModels
-                Resource: 
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-instant-v1
-              
-              # SageMaker Endpoint Invocation
-              - Effect: Allow
-                Action:
-                  - sagemaker:InvokeEndpoint
-                  - sagemaker:DescribeEndpoint
-                  - sagemaker:DescribeEndpointConfig
-                  - sagemaker:DescribeModel
-                Resource: 
-                  - !Sub arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint/*
-                  - !Sub arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint-config/*
-                  - !Sub arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:model/*
-              
-              # CloudWatch Logs
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: 
-                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
-              
-              # X-Ray Tracing (optional but recommended)
-              - Effect: Allow
-                Action:
-                  - xray:PutTraceSegments
-                  - xray:PutTelemetryRecords
-                Resource: '*'
+      table = dynamodb.Table(os.environ['TABLE_NAME'])
 
-  # New role for CloudFormation service operations
-  CloudFormationServiceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub CloudFormationServiceRole-${Environment}
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: cloudformation.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/PowerUserAccess
-      Policies:
-        - PolicyName: IAMRoleManagement
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - iam:CreateRole
-                  - iam:DeleteRole
-                  - iam:UpdateRole
-                  - iam:AttachRolePolicy
-                  - iam:DetachRolePolicy
-                  - iam:PutRolePolicy
-                  - iam:DeleteRolePolicy
-                  - iam:GetRole
-                  - iam:GetRolePolicy
-                  - iam:ListRolePolicies
-                  - iam:ListAttachedRolePolicies
-                  - iam:PassRole
-                Resource: '*'
+      def lambda_handler(event, context):
+          try:
+              secret_val = secrets.get_secret_value(SecretId=os.environ['TELEGRAM_SECRET'])
+              token = json.loads(secret_val['SecretString'])['token']
 
-  # API Gateway execution role for Lambda integration
-  ApiGatewayExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ApiGatewayExecutionRole-${Environment}
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: apigateway.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: LambdaInvokePolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                Resource: 
-                  - !GetAtt TelegramBotLambda.Arn
-                  - !GetAtt ModelEnsembleLambda.Arn
-        - PolicyName: CloudWatchLogsPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: 
-                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/*
+              body = json.loads(event['body'])
+              msg = body['message']
+              chat_id = msg['chat']['id']
+              text = msg['text'] if 'text' in msg else ''
 
-  ### Lambda Functions ###
-  TelegramBotLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub TelegramPredictionBot-${Environment}
-      Runtime: python3.11
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Handler: telegram_bot.lambda_handler
-      Code:
-        ZipFile: |
-          import json
-          import boto3
-          import requests
-          import os
-          from datetime import datetime
-          import logging
+              response = handle_message(text)
+              send_telegram(token, chat_id, response)
+              return { 'statusCode': 200, 'body': json.dumps('OK') }
+          except Exception as e:
+              print(f"Error: {e}")
+              return { 'statusCode': 500, 'body': str(e) }
 
-          logger = logging.getLogger()
-          logger.setLevel(logging.INFO)
+      def handle_message(message):
+          if not message.startswith('/analyze'):
+              return "Send /analyze [match details] to get LLM-powered insights."
 
-          # Initialize Bedrock client
-          bedrock_client = boto3.client('bedrock-runtime')
+          match_text = message[9:].strip()
+          sentiment = comprehend.detect_sentiment(Text=match_text, LanguageCode='en')['Sentiment']
+          entities = comprehend.detect_entities(Text=match_text, LanguageCode='en')['Entities']
 
-          def lambda_handler(event, context):
-              """Telegram Bot Handler with Bedrock Claude Integration"""
-              try:
-                  secrets_client = boto3.client('secretsmanager')
-                  bot_token = json.loads(
-                      secrets_client.get_secret_value(
-                          SecretId=f"{os.environ['ENVIRONMENT']}-telegram-bot-token"
-                      )['SecretString']
-                  )['token']
-                  
-                  body = json.loads(event['body'])
-                  
-                  if 'message' in body:
-                      chat_id = body['message']['chat']['id']
-                      message_text = body['message'].get('text', '')
-                      user_id = str(body['message']['from']['id'])
-                      
-                      response_text = handle_command(message_text, user_id, chat_id)
-                      send_message(bot_token, chat_id, response_text)
-                  
-                  return {'statusCode': 200, 'body': json.dumps({'status': 'success'})}
-              
-              except Exception as e:
-                  logger.error(f"Error: {str(e)}")
-                  return {'statusCode': 500, 'body': json.dumps({'error': str(e)})}
+          prompt = f"""
+          Analyze the following sports match info:
+          {match_text}
 
-          def handle_command(message_text, user_id, chat_id):
-              """Handle bot commands with Bedrock Claude analysis"""
-              
-              if message_text.startswith('/predict'):
-                  return handle_prediction_with_bedrock(message_text, user_id)
-              elif message_text.startswith('/analysis'):
-                  return handle_analysis_with_bedrock(message_text, user_id)
-              elif message_text.startswith('/start'):
-                  return get_welcome_message()
-              else:
-                  return "Use /predict [sport] [team1] vs [team2] for predictions"
+          Consider:
+          - Predicted outcome
+          - Form/trends
+          - Sentiment: {sentiment}
+          - Named entities: {', '.join([e['Text'] for e in entities if e['Score'] > 0.9])}
 
-          def handle_prediction_with_bedrock(message_text, user_id):
-              """Generate prediction using ensemble models + Bedrock Claude"""
-              try:
-                  # Parse prediction request
-                  parts = message_text.split()
-                  if len(parts) < 5:
-                      return "Format: /predict [sport] [team1] vs [team2]"
-                  
-                  sport = parts[1]
-                  teams = ' '.join(parts[2:]).split(' vs ')
-                  
-                  if len(teams) != 2:
-                      return "Use format: Team1 vs Team2"
-                  
-                  # Get ensemble prediction (simulate for demo)
-                  ensemble_result = get_ensemble_prediction(sport, teams[0], teams[1])
-                  
-                  # Generate contextual analysis with Bedrock Claude
-                  claude_analysis = generate_bedrock_analysis(sport, teams, ensemble_result)
-                  
-                  return f"🏆 {sport.upper()} PREDICTION\\n\\n{teams[0]} vs {teams[1]}\\n\\n{claude_analysis}"
-              
-              except Exception as e:
-                  return f"Error generating prediction: {str(e)}"
+          Format:
+          1. Headline prediction
+          2. Tactical breakdown
+          3. Key players
+          4. Summary in 3 lines
+          """
 
-          def generate_bedrock_analysis(sport, teams, prediction_data):
-              """Generate analysis using Amazon Bedrock Claude"""
-              try:
-                  prompt = f"""
-                  Analyze this {sport} match prediction:
-                  Teams: {teams[0]} vs {teams[1]}
-                  Model Predictions: {prediction_data}
-                  
-                  Provide a concise analysis covering:
-                  1. Predicted outcome and confidence
-                  2. Key factors influencing prediction  
-                  3. Recent form analysis
-                  4. Head-to-head insights
-                  
-                  Keep response under 500 characters for Telegram.
-                  """
-                  
-                  body = {
-                      "anthropic_version": "bedrock-2023-05-31",
-                      "max_tokens": 300,
-                      "messages": [
-                          {
-                              "role": "user",
-                              "content": prompt
-                          }
-                      ]
-                  }
-                  
-                  response = bedrock_client.invoke_model(
-                      modelId='anthropic.claude-3-haiku-20240307-v1:0',
-                      body=json.dumps(body)
-                  )
-                  
-                  result = json.loads(response['body'].read())
-                  return result['content'][0]['text']
-              
-              except Exception as e:
-                  return f"Claude analysis unavailable. Prediction: {prediction_data['winner']} ({prediction_data['confidence']:.1%})"
+          payload = {
+              "anthropic_version": "bedrock-2023-05-31",
+              "max_tokens": 500,
+              "messages": [{"role": "user", "content": prompt}]
+          }
 
-          def get_ensemble_prediction(sport, team1, team2):
-              """Simulate ensemble model prediction"""
-              import random
-              winner = random.choice([team1, team2])
-              confidence = random.uniform(0.6, 0.9)
-              return {
-                  'winner': winner,
-                  'confidence': confidence,
-                  'models': {
-                      'tensorflow': confidence + random.uniform(-0.1, 0.1),
-                      'pytorch': confidence + random.uniform(-0.1, 0.1),
-                      'lightgbm': confidence + random.uniform(-0.1, 0.1),
-                      'xgboost': confidence + random.uniform(-0.1, 0.1)
-                  }
-              }
+          result = bedrock.invoke_model(
+              modelId='anthropic.claude-3-sonnet-20240229-v1:0',
+              body=json.dumps(payload)
+          )
 
-          def handle_analysis_with_bedrock(message_text, user_id):
-              """Generate detailed match analysis with Bedrock"""
-              prompt = f"Provide detailed sports analysis for: {message_text[10:]}"
-              
-              try:
-                  body = {
-                      "anthropic_version": "bedrock-2023-05-31",
-                      "max_tokens": 500,
-                      "messages": [{"role": "user", "content": prompt}]
-                  }
-                  
-                  response = bedrock_client.invoke_model(
-                      modelId='anthropic.claude-3-sonnet-20240229-v1:0',
-                      body=json.dumps(body)
-                  )
-                  
-                  result = json.loads(response['body'].read())
-                  return result['content'][0]['text']
-              
-              except Exception as e:
-                  return f"Analysis unavailable: {str(e)}"
+          text_result = json.loads(result['body'].read())['content'][0]['text']
 
-          def get_welcome_message():
-              return """🏆 Multi-Sport AI Prediction Bot
+          match_id = str(uuid.uuid4())
+          table.put_item(Item={
+              "match_id": match_id,
+              "input": match_text,
+              "analysis": text_result
+          })
 
-          Commands:
-          /predict [sport] [team1] vs [team2] - AI prediction with Claude analysis
-          /analysis [match details] - Detailed match analysis
-          
-          Powered by TensorFlow, PyTorch, LightGBM, XGBoost + Amazon Bedrock Claude"""
+          return text_result[:1000]
 
-          def send_message(bot_token, chat_id, text):
-              url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-              requests.post(url, json={'chat_id': chat_id, 'text': text})
+      def send_telegram(token, chat_id, text):
+          url = f"https://api.telegram.org/bot{token}/sendMessage"
+          requests.post(url, json={"chat_id": chat_id, "text": text})
 
-      Timeout: 30
-      MemorySize: 512
-      Environment:
-        Variables:
-          ENVIRONMENT: !Ref Environment
-          DATASET_BUCKET: !Ref SportsDatasetBucket
-          RESULTS_BUCKET: !Ref PredictionResultsBucket
-          USER_TABLE: !Ref UserPreferencesTable
-          HISTORY_TABLE: !Ref PredictionHistoryTable
+API Gateway
 
-  ModelEnsembleLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub ModelEnsembleHandler-${Environment}
-      Runtime: python3.11
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Handler: model_ensemble.lambda_handler
-      Code:
-        ZipFile: |
-          import json
-          import boto3
-          import numpy as np
+BotAPI: Type: AWS::ApiGateway::RestApi Properties: Name: !Sub TelegramBotAPI-${Environment} Description: API Gateway for Telegram Bot
 
-          bedrock_client = boto3.client('bedrock-runtime')
+BotResource: Type: AWS::ApiGateway::Resource Properties: RestApiId: !Ref BotAPI ParentId: !GetAtt BotAPI.RootResourceId PathPart: telegram
 
-          def lambda_handler(event, context):
-              """Ensemble prediction with Bedrock Claude context generation"""
-              try:
-                  match_data = event.get('match_data')
-                  sport = event.get('sport')
-                  
-                  # Simulate ensemble predictions
-                  predictions = simulate_ensemble_predictions(match_data, sport)
-                  
-                  # Generate Claude context via Bedrock
-                  context = generate_bedrock_context(match_data, sport, predictions)
-                  
-                  return {
-                      'statusCode': 200,
-                      'body': json.dumps({
-                          'ensemble_prediction': predictions['ensemble'],
-                          'individual_predictions': predictions['individual'],
-                          'bedrock_context': context
-                      })
-                  }
-              
-              except Exception as e:
-                  return {'statusCode': 500, 'body': json.dumps({'error': str(e)})}
+BotMethod: Type: AWS::ApiGateway::Method Properties: RestApiId: !Ref BotAPI ResourceId: !Ref BotResource HttpMethod: POST AuthorizationType: NONE Integration: Type: AWS_PROXY IntegrationHttpMethod: POST Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TelegramAnalysisBot.Arn}/invocations
 
-          def simulate_ensemble_predictions(match_data, sport):
-              """Simulate 4-model ensemble predictions"""
-              import random
-              
-              base_prob = random.uniform(0.4, 0.8)
-              individual = {
-                  'tensorflow': base_prob + random.uniform(-0.1, 0.1),
-                  'pytorch': base_prob + random.uniform(-0.1, 0.1), 
-                  'lightgbm': base_prob + random.uniform(-0.1, 0.1),
-                  'xgboost': base_prob + random.uniform(-0.1, 0.1)
-              }
-              
-              # Weighted ensemble (TF=0.3, PyTorch=0.3, LightGBM=0.2, XGBoost=0.2)
-              ensemble = (individual['tensorflow'] * 0.3 + 
-                         individual['pytorch'] * 0.3 +
-                         individual['lightgbm'] * 0.2 + 
-                         individual['xgboost'] * 0.2)
-              
-              return {'individual': individual, 'ensemble': ensemble}
+Deployment: Type: AWS::ApiGateway::Deployment DependsOn: BotMethod Properties: RestApiId: !Ref BotAPI StageName: !Ref Environment
 
-          def generate_bedrock_context(match_data, sport, predictions):
-              """Generate contextual analysis using Bedrock Claude"""
-              try:
-                  prompt = f"""
-                  Generate professional sports analysis context:
-                  Sport: {sport}
-                  Match Data: {match_data}
-                  Model Predictions: {predictions}
-                  
-                  Provide insights on prediction confidence, key factors, and analysis summary.
-                  """
-                  
-                  body = {
-                      "anthropic_version": "bedrock-2023-05-31",
-                      "max_tokens": 400,
-                      "messages": [{"role": "user", "content": prompt}]
-                  }
-                  
-                  response = bedrock_client.invoke_model(
-                      modelId='anthropic.claude-3-haiku-20240307-v1:0',
-                      body=json.dumps(body)
-                  )
-                  
-                  result = json.loads(response['body'].read())
-                  return result['content'][0]['text']
-              
-              except Exception as e:
-                  return f"Context generation error: {str(e)}"
+Permissions
 
-      Timeout: 60
-      MemorySize: 1024
+LambdaInvokePermission: Type: AWS::Lambda::Permission Properties: FunctionName: !Ref TelegramAnalysisBot Action: lambda:InvokeFunction Principal: apigateway.amazonaws.com SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BotAPI}///*
 
-  ### SageMaker Endpoints ###
-  TensorFlowModel:
-    Type: AWS::SageMaker::Model
-    Properties:
-      ModelName: !Sub tensorflow-sports-model-${Environment}
-      ExecutionRoleArn: !GetAtt SageMakerExecutionRole.Arn
-      PrimaryContainer:
-        Image: 763104351884.dkr.ecr.us-east-1.amazonaws.com/tensorflow-inference:2.12-cpu
-        ModelDataUrl: !Sub s3://${ModelArtifactsBucket}/tensorflow/model.tar.gz
+Outputs: WebhookURL: Description: Telegram webhook URL Value: !Sub https://${BotAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/telegram
 
-  TensorFlowEndpointConfig:
-    Type: AWS::SageMaker::EndpointConfig
-    Properties:
-      EndpointConfigName: !Sub tensorflow-sports-config-${Environment}
-      ProductionVariants:
-        - ModelName: !Ref TensorFlowModel
-          VariantName: tensorflow-variant
-          InitialInstanceCount: 1
-          InstanceType: ml.t2.medium
+DynamoDBTable: Description: DynamoDB Table for analyses Value: !Ref SportsAnalysisTable
 
-  TensorFlowModelEndpoint:
-    Type: AWS::SageMaker::Endpoint
-    Properties:
-      EndpointName: !Sub tensorflow-sports-endpoint-${Environment}
-      EndpointConfigName: !Ref TensorFlowEndpointConfig
+LambdaName: Description: Lambda Bot Name Value: !Ref TelegramAnalysisBot
 
-  ### API Gateway ###
-  TelegramBotAPI:
-    Type: AWS::ApiGateway::RestApi
-    Properties:
-      Name: !Sub TelegramBotAPI-${Environment}
-      Description: API Gateway for Telegram Webhook
-
-  TelegramWebhookResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref TelegramBotAPI
-      ParentId: !GetAtt TelegramBotAPI.RootResourceId
-      PathPart: telegram
-
-  TelegramWebhookMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref TelegramBotAPI
-      ResourceId: !Ref TelegramWebhookResource
-      HttpMethod: POST
-      AuthorizationType: NONE
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TelegramBotLambda.Arn}/invocations
-
-  TelegramBotAPIDeployment:
-    Type: AWS::ApiGateway::Deployment
-    DependsOn: TelegramWebhookMethod
-    Properties:
-      RestApiId: !Ref TelegramBotAPI
-      StageName: !Ref Environment
-
-  ### Lambda Permissions ###
-  TelegramBotLambdaPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref TelegramBotLambda
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TelegramBotAPI}/*/*/*
-
-Outputs:
-  ### Primary Outputs ###
-  TelegramWebhookURL:
-    Description: Telegram webhook URL for bot configuration
-    Value: !Sub https://${TelegramBotAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/telegram
-    Export:
-      Name: !Sub ${Environment}-TelegramWebhookURL
-
-  SportsDatasetBucket:
-    Description: S3 bucket for sports datasets
-    Value: !Ref SportsDatasetBucket
-    Export:
-      Name: !Sub ${Environment}-SportsDatasetBucket
-
-  ModelArtifactsBucket:
-    Description: S3 bucket for model artifacts
-    Value: !Ref ModelArtifactsBucket
-    Export:
-      Name: !Sub ${Environment}-ModelArtifactsBucket
-
-  TensorFlowEndpoint:
-    Description: TensorFlow model endpoint
-    Value: !Ref TensorFlowModelEndpoint
-    Export:
-      Name: !Sub ${Environment}-TensorFlowEndpoint
-
-  BedrockIntegration:
-    Description: Amazon Bedrock Claude models available
-    Value: "anthropic.claude-3-sonnet-20240229-v1:0, anthropic.claude-3-haiku-20240307-v1:0"
-    Export:
-      Name: !Sub ${Environment}-BedrockModels
-
-  DeploymentInstructions:
-    Description: Setup instructions
-    Value: !Sub |
-      🚀 Multi-Sport AI with Bedrock Claude deployed!
-      
-      Setup:
-      1. Set Telegram webhook: ${TelegramBotAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/telegram
-      2. Upload model artifacts to S3
-      3. Ensure Bedrock access in region ${AWS::Region}
-      
-      Features: 4-model ensemble + Amazon Bedrock Claude analysis
