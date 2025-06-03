@@ -753,12 +753,9 @@ Outputs:
   DeploymentInstructions:
     Description: Setup instructions
     Value: !Sub |
-       Multi-Sport AI with Bedrock Claude deployed!
-
-      Setup:
-      1. Set Telegram webhook: ${TelegramBotAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/telegram
-      2. Upload model artifacts to S3: s3://${ModelArtifactsBucket}/tensorflow/model.tar.gz
-      3. Ensure Bedrock access in region ${AWS::Region}
-      4. Set DeployModels=true to enable SageMaker endpoints (after uploading models)
+   Multi-Sport AI with Bedrock Cl ...
+Setup:
+  - Set Telegram webhook: ${TelegramWebhookUrl}
+  - Upload model artifacts to S3
 
       Features: 4-model ensemble + Amazon Bedrock Claude analysis
