@@ -144,7 +144,8 @@ Resources:
   SageMakerExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub SageMakerExecutionRole-${Environment}-${AWS::AccountId}
+      # Remove or modify the RoleName to avoid conflicts
+      # RoleName: !Sub SageMakerExecutionRole-${Environment}-${AWS::AccountId}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -200,7 +201,6 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService: sagemaker.amazonaws.com
-
   # Enhanced Lambda Execution Role with proper dependencies and permissions
   LambdaExecutionRoleV2:
     Type: AWS::IAM::Role
