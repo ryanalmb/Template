@@ -412,7 +412,7 @@ Resources:
                   # Generate contextual analysis with Bedrock Claude
                   claude_analysis = generate_bedrock_analysis(sport, teams, ensemble_result, bedrock_client)
 
-                  return f"ðŸ† {sport.upper()} PREDICTION\n\n{teams[0].strip()} vs {teams[1].strip()}\n\n{claude_analysis}"
+                  return {sport.upper()} PREDICTION\n\n{teams[0].strip()} vs {teams[1].strip()}\n\n{claude_analysis}"
 
               except Exception as e:
                   logger.error(f"Prediction error: {str(e)}")
@@ -753,7 +753,7 @@ Outputs:
   DeploymentInstructions:
     Description: Setup instructions
     Value: !Sub |
-      ðŸš€ Multi-Sport AI with Bedrock Claude deployed!
+       Multi-Sport AI with Bedrock Claude deployed!
 
       Setup:
       1. Set Telegram webhook: ${TelegramBotAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/telegram
