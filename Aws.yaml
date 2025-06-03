@@ -131,7 +131,7 @@ Resources:
         - AttributeName: timestamp
           KeyType: RANGE
 
-  ### IAM Roles ###
+### Enhanced IAM Roles ###
   SageMakerExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -146,6 +146,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
       Policies:
+        # S3 Access for model artifacts and datasets
         - PolicyName: S3AccessPolicy
           PolicyDocument:
             Version: '2012-10-17'
@@ -154,13 +155,109 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
+                  - s3:DeleteObject
                   - s3:ListBucket
+                  - s3:GetBucketLocation
                 Resource:
                   - !Sub ${SportsDatasetBucket}/*
                   - !GetAtt SportsDatasetBucket.Arn
                   - !Sub ${ModelArtifactsBucket}/*
                   - !GetAtt ModelArtifactsBucket.Arn
+                  - !Sub ${PredictionResultsBucket}/*
+                  - !GetAtt PredictionResultsBucket.Arn
+        
+        # ECR Access for container images
+        - PolicyName: ECRAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetAuthorizationToken
+                  - ecr:DescribeRepositories
+                  - ecr:DescribeImages
+                Resource: '*'
+        
+        # CloudWatch Logs for model endpoints
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: 
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*:*
+        
+        # CloudWatch Metrics for monitoring
+        - PolicyName: CloudWatchMetricsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                Resource: '*'
+        
+        # VPC Access (if needed for private deployments)
+        - PolicyName: VPCAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:CreateNetworkInterfacePermission
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DeleteNetworkInterfacePermission
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeDhcpOptions
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                Resource: '*'
+        
+        # KMS Access for encryption (if using encrypted resources)
+        - PolicyName: KMSAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                  - kms:CreateGrant
+                  - kms:DescribeKey
+                Resource: 
+                  - !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*
+        
+        # Bedrock Access for AI integration
+        - PolicyName: BedrockAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListFoundationModels
+                Resource: 
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-instant-v1
 
+  # Enhanced Lambda Execution Role with additional permissions
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -174,48 +271,163 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
         - PolicyName: MultiSportBotPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+              # S3 Access
               - Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:ListBucket
+                  - s3:DeleteObject
                 Resource:
                   - !Sub ${SportsDatasetBucket}/*
                   - !GetAtt SportsDatasetBucket.Arn
                   - !Sub ${PredictionResultsBucket}/*
                   - !GetAtt PredictionResultsBucket.Arn
+                  - !Sub ${ModelArtifactsBucket}/*
+                  - !GetAtt ModelArtifactsBucket.Arn
+              
+              # DynamoDB Access
               - Effect: Allow
                 Action:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
                   - dynamodb:Query
                   - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
                 Resource:
                   - !GetAtt UserPreferencesTable.Arn
                   - !GetAtt PredictionHistoryTable.Arn
+                  - !Sub ${UserPreferencesTable.Arn}/index/*
+                  - !Sub ${PredictionHistoryTable.Arn}/index/*
+              
+              # Secrets Manager Access
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
                 Resource:
                   - !Ref TelegramBotSecret
+                  - !Ref KaggleAPISecret
+                  - !Ref GitHubTokenSecret
+              
+              # Bedrock Access
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListFoundationModels
                 Resource: 
                   - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-instant-v1
+              
+              # SageMaker Endpoint Invocation
               - Effect: Allow
                 Action:
                   - sagemaker:InvokeEndpoint
+                  - sagemaker:DescribeEndpoint
+                  - sagemaker:DescribeEndpointConfig
+                  - sagemaker:DescribeModel
+                Resource: 
+                  - !Sub arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint/*
+                  - !Sub arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint-config/*
+                  - !Sub arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:model/*
+              
+              # CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+              
+              # X-Ray Tracing (optional but recommended)
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
                 Resource: '*'
+
+  # New role for CloudFormation service operations
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub CloudFormationServiceRole-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: IAMRoleManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:UpdateRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:PassRole
+                Resource: '*'
+
+  # API Gateway execution role for Lambda integration
+  ApiGatewayExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ApiGatewayExecutionRole-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: 
+                  - !GetAtt TelegramBotLambda.Arn
+                  - !GetAtt ModelEnsembleLambda.Arn
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/*
 
   ### Lambda Functions ###
   TelegramBotLambda:
