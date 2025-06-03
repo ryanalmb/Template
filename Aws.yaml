@@ -632,7 +632,7 @@ ModelEnsembleLambda:
       Environment:
         Variables:
           ENVIRONMENT: !Ref Environment ### SageMaker Endpoints (Conditional) ###
-  TensorFlowModel:
+TensorFlowModel:
     Type: AWS::SageMaker::Model
     Condition: ShouldDeployModels
     Properties:
