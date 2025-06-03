@@ -1,121 +1,227 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Multimodal Sports Analysis Bot with Bedrock Claude, Rekognition, Comprehend, and Telegram Integration
 
-AWSTemplateFormatVersion: '2010-09-09' Description: Multimodal Sports Analysis Bot with Bedrock Claude, Rekognition, Comprehend, and Telegram Integration
+Parameters:
+  TelegramBotToken:
+    Type: String
+    NoEcho: true
+    Description: Telegram Bot API Token
 
-Parameters: TelegramBotToken: Type: String NoEcho: true Description: Telegram Bot API Token
-
-Environment: Type: String Default: dev AllowedValues: [dev, prod] Description: Deployment environment
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Deployment environment
 
 Resources:
 
-DynamoDB
+  ### DynamoDB ###
+  SportsAnalysisTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub sports-analysis-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: match_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: match_id
+          KeyType: HASH
 
-SportsAnalysisTable: Type: AWS::DynamoDB::Table Properties: TableName: !Sub sports-analysis-${Environment} BillingMode: PAY_PER_REQUEST AttributeDefinitions: - AttributeName: match_id AttributeType: S KeySchema: - AttributeName: match_id KeyType: HASH
+  ### Secrets Manager ###
+  TelegramBotSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${Environment}-telegram-token
+      SecretString: !Sub |
+        { "token": "${TelegramBotToken}" }
 
-Secrets Manager
+  ### IAM Role ###
+  AnalysisLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub LLMAnalysisLambdaRole-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: MultimodalAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - comprehend:DetectEntities
+                  - comprehend:DetectSentiment
+                  - rekognition:DetectLabels
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt SportsAnalysisTable.Arn
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref TelegramBotSecret
 
-TelegramBotSecret: Type: AWS::SecretsManager::Secret Properties: Name: !Sub ${Environment}-telegram-token SecretString: !Sub | { "token": "${TelegramBotToken}" }
+  ### Lambda Function ###
+  TelegramAnalysisBot:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub TelegramSportsBot-${Environment}
+      Runtime: python3.11
+      Role: !GetAtt AnalysisLambdaRole.Arn
+      Handler: index.lambda_handler
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          TABLE_NAME: !Ref SportsAnalysisTable
+          TELEGRAM_SECRET: !Ref TelegramBotSecret
+      Code:
+        ZipFile: |
+          import json, boto3, os, uuid, requests
+          from base64 import b64decode
 
-IAM Role
+          bedrock = boto3.client('bedrock-runtime')
+          comprehend = boto3.client('comprehend')
+          rekognition = boto3.client('rekognition')
+          dynamodb = boto3.resource('dynamodb')
+          secrets = boto3.client('secretsmanager')
 
-AnalysisLambdaRole: Type: AWS::IAM::Role Properties: RoleName: !Sub LLMAnalysisLambdaRole-${Environment} AssumeRolePolicyDocument: Version: '2012-10-17' Statement: - Effect: Allow Principal: Service: lambda.amazonaws.com Action: sts:AssumeRole ManagedPolicyArns: - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole Policies: - PolicyName: MultimodalAccess PolicyDocument: Version: '2012-10-17' Statement: - Effect: Allow Action: - bedrock:InvokeModel - bedrock:InvokeModelWithResponseStream - comprehend:DetectEntities - comprehend:DetectSentiment - rekognition:DetectLabels Resource: '*' - Effect: Allow Action: - dynamodb:PutItem Resource: !GetAtt SportsAnalysisTable.Arn - Effect: Allow Action: - secretsmanager:GetSecretValue Resource: !Ref TelegramBotSecret
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
 
-Lambda Function
+          def lambda_handler(event, context):
+              try:
+                  secret_val = secrets.get_secret_value(SecretId=os.environ['TELEGRAM_SECRET'])
+                  token = json.loads(secret_val['SecretString'])['token']
 
-TelegramAnalysisBot: Type: AWS::Lambda::Function Properties: FunctionName: !Sub TelegramSportsBot-${Environment} Runtime: python3.11 Role: !GetAtt AnalysisLambdaRole.Arn Handler: index.lambda_handler Timeout: 30 MemorySize: 512 Environment: Variables: ENVIRONMENT: !Ref Environment TABLE_NAME: !Ref SportsAnalysisTable TELEGRAM_SECRET: !Ref TelegramBotSecret Code: ZipFile: | import json, boto3, os, uuid, requests from base64 import b64decode
+                  body = json.loads(event['body'])
+                  msg = body['message']
+                  chat_id = msg['chat']['id']
+                  text = msg['text'] if 'text' in msg else ''
 
-bedrock = boto3.client('bedrock-runtime')
-      comprehend = boto3.client('comprehend')
-      rekognition = boto3.client('rekognition')
-      dynamodb = boto3.resource('dynamodb')
-      secrets = boto3.client('secretsmanager')
+                  response = handle_message(text)
+                  send_telegram(token, chat_id, response)
+                  return { 'statusCode': 200, 'body': json.dumps('OK') }
+              except Exception as e:
+                  print(f"Error: {e}")
+                  return { 'statusCode': 500, 'body': str(e) }
 
-      table = dynamodb.Table(os.environ['TABLE_NAME'])
+          def handle_message(message):
+              if not message.startswith('/analyze'):
+                  return "Send /analyze [match details] to get LLM-powered insights."
 
-      def lambda_handler(event, context):
-          try:
-              secret_val = secrets.get_secret_value(SecretId=os.environ['TELEGRAM_SECRET'])
-              token = json.loads(secret_val['SecretString'])['token']
+              match_text = message[9:].strip()
+              sentiment = comprehend.detect_sentiment(Text=match_text, LanguageCode='en')['Sentiment']
+              entities = comprehend.detect_entities(Text=match_text, LanguageCode='en')['Entities']
 
-              body = json.loads(event['body'])
-              msg = body['message']
-              chat_id = msg['chat']['id']
-              text = msg['text'] if 'text' in msg else ''
+              prompt = f"""
+              Analyze the following sports match info:
+              {match_text}
 
-              response = handle_message(text)
-              send_telegram(token, chat_id, response)
-              return { 'statusCode': 200, 'body': json.dumps('OK') }
-          except Exception as e:
-              print(f"Error: {e}")
-              return { 'statusCode': 500, 'body': str(e) }
+              Consider:
+              - Predicted outcome
+              - Form/trends
+              - Sentiment: {sentiment}
+              - Named entities: {', '.join([e['Text'] for e in entities if e['Score'] > 0.9])}
 
-      def handle_message(message):
-          if not message.startswith('/analyze'):
-              return "Send /analyze [match details] to get LLM-powered insights."
+              Format:
+              1. Headline prediction
+              2. Tactical breakdown
+              3. Key players
+              4. Summary in 3 lines
+              """
 
-          match_text = message[9:].strip()
-          sentiment = comprehend.detect_sentiment(Text=match_text, LanguageCode='en')['Sentiment']
-          entities = comprehend.detect_entities(Text=match_text, LanguageCode='en')['Entities']
+              payload = {
+                  "anthropic_version": "bedrock-2023-05-31",
+                  "max_tokens": 500,
+                  "messages": [{"role": "user", "content": prompt}]
+              }
 
-          prompt = f"""
-          Analyze the following sports match info:
-          {match_text}
+              result = bedrock.invoke_model(
+                  modelId='anthropic.claude-3-sonnet-20240229-v1:0',
+                  body=json.dumps(payload)
+              )
 
-          Consider:
-          - Predicted outcome
-          - Form/trends
-          - Sentiment: {sentiment}
-          - Named entities: {', '.join([e['Text'] for e in entities if e['Score'] > 0.9])}
+              text_result = json.loads(result['body'].read())['content'][0]['text']
 
-          Format:
-          1. Headline prediction
-          2. Tactical breakdown
-          3. Key players
-          4. Summary in 3 lines
-          """
+              match_id = str(uuid.uuid4())
+              table.put_item(Item={
+                  "match_id": match_id,
+                  "input": match_text,
+                  "analysis": text_result
+              })
 
-          payload = {
-              "anthropic_version": "bedrock-2023-05-31",
-              "max_tokens": 500,
-              "messages": [{"role": "user", "content": prompt}]
-          }
+              return text_result[:1000]
 
-          result = bedrock.invoke_model(
-              modelId='anthropic.claude-3-sonnet-20240229-v1:0',
-              body=json.dumps(payload)
-          )
+          def send_telegram(token, chat_id, text):
+              url = f"https://api.telegram.org/bot{token}/sendMessage"
+              requests.post(url, json={"chat_id": chat_id, "text": text})
 
-          text_result = json.loads(result['body'].read())['content'][0]['text']
+  ### API Gateway ###
+  BotAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub TelegramBotAPI-${Environment}
+      Description: API Gateway for Telegram Bot
 
-          match_id = str(uuid.uuid4())
-          table.put_item(Item={
-              "match_id": match_id,
-              "input": match_text,
-              "analysis": text_result
-          })
+  BotResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref BotAPI
+      ParentId: !GetAtt BotAPI.RootResourceId
+      PathPart: telegram
 
-          return text_result[:1000]
+  BotMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref BotAPI
+      ResourceId: !Ref BotResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TelegramAnalysisBot.Arn}/invocations
 
-      def send_telegram(token, chat_id, text):
-          url = f"https://api.telegram.org/bot{token}/sendMessage"
-          requests.post(url, json={"chat_id": chat_id, "text": text})
+  Deployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: BotMethod
+    Properties:
+      RestApiId: !Ref BotAPI
+      StageName: !Ref Environment
 
-API Gateway
+  ### Permissions ###
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TelegramAnalysisBot
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BotAPI}/*/*/*
 
-BotAPI: Type: AWS::ApiGateway::RestApi Properties: Name: !Sub TelegramBotAPI-${Environment} Description: API Gateway for Telegram Bot
+Outputs:
+  WebhookURL:
+    Description: Telegram webhook URL
+    Value: !Sub https://${BotAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/telegram
 
-BotResource: Type: AWS::ApiGateway::Resource Properties: RestApiId: !Ref BotAPI ParentId: !GetAtt BotAPI.RootResourceId PathPart: telegram
+  DynamoDBTable:
+    Description: DynamoDB Table for analyses
+    Value: !Ref SportsAnalysisTable
 
-BotMethod: Type: AWS::ApiGateway::Method Properties: RestApiId: !Ref BotAPI ResourceId: !Ref BotResource HttpMethod: POST AuthorizationType: NONE Integration: Type: AWS_PROXY IntegrationHttpMethod: POST Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TelegramAnalysisBot.Arn}/invocations
+  LambdaName:
+    Description: Lambda Bot Name
+    Value: !Ref TelegramAnalysisBot
 
-Deployment: Type: AWS::ApiGateway::Deployment DependsOn: BotMethod Properties: RestApiId: !Ref BotAPI StageName: !Ref Environment
 
-Permissions
-
-LambdaInvokePermission: Type: AWS::Lambda::Permission Properties: FunctionName: !Ref TelegramAnalysisBot Action: lambda:InvokeFunction Principal: apigateway.amazonaws.com SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BotAPI}///*
-
-Outputs: WebhookURL: Description: Telegram webhook URL Value: !Sub https://${BotAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/telegram
-
-DynamoDBTable: Description: DynamoDB Table for analyses Value: !Ref SportsAnalysisTable
-
-LambdaName: Description: Lambda Bot Name Value: !Ref TelegramAnalysisBot
 
