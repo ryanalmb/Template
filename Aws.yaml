@@ -753,9 +753,4 @@ Outputs:
   DeploymentInstructions:
     Description: Setup instructions
     Value: !Sub |
-   Multi-Sport AI with Bedrock Cl ...
-Setup:
-  - Set Telegram webhook: ${TelegramWebhookUrl}
-  - Upload model artifacts to S3
-
-      Features: 4-model ensemble + Amazon Bedrock Claude analysis
+   Multi-Sport AI with Bedrock ClI ...
