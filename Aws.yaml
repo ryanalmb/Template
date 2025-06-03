@@ -306,15 +306,9 @@ Resources:
                 Resource: '*'
 
   ### Lambda Functions ###
-  TelegramBotLambda:
+TelegramBotLambda:
     Type: AWS::Lambda::Function
-    DependsOn: 
-      - LambdaExecutionRoleV2
-      - TelegramBotSecret
-      - UserPreferencesTable
-      - PredictionHistoryTable
-      - SportsDatasetBucket
-      - PredictionResultsBucket
+    # Remove unnecessary DependsOn - CloudFormation handles dependencies automatically
     Properties:
       FunctionName: !Sub TelegramPredictionBot-${Environment}
       Runtime: python3.11
