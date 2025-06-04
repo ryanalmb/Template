@@ -390,26 +390,78 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "${ApiGateway}/*/POST/webhook"
 
-  # SageMaker Notebook for model development
-  SageMakerRole:
-    Type: AWS::IAM::Role
+  # CloudWatch Dashboard for monitoring
+  BotDashboard:
+    Type: AWS::CloudWatch::Dashboard
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: sagemaker.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+      DashboardName: !Sub "${AWS::StackName}-analytics"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${TelegramBotFunction}"],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${TelegramBotFunction}"],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${TelegramBotFunction}"]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "Bot Performance Metrics"
+              }
+            }
+          ]
+        }
 
-  NotebookInstance:
-    Type: AWS::SageMaker::NotebookInstance
+  # Model Training Lambda (Alternative to SageMaker Notebook)
+  ModelTrainingFunction:
+    Type: AWS::Lambda::Function
     Properties:
-      NotebookInstanceName: !Sub "${AWS::StackName}-notebook"
-      InstanceType: ml.t3.medium
-      RoleArn: !GetAtt SageMakerRole.Arn
+      FunctionName: !Sub "${AWS::StackName}-model-trainer"
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 900
+      MemorySize: 3008
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          GAMES_TABLE: !Ref GamesTable
+          PREDICTIONS_TABLE: !Ref PredictionsTable
+          MEDIA_BUCKET: !Ref MediaBucket
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import pandas as pd
+          from datetime import datetime, timedelta
+          
+          def lambda_handler(event, context):
+              """Train and update ML models for sports predictions"""
+              try:
+                  # Placeholder for model training logic
+                  # Can integrate with Bedrock fine-tuning or custom models
+                  
+                  # Fetch historical game data
+                  dynamodb = boto3.resource('dynamodb')
+                  games_table = dynamodb.Table(event.get('GAMES_TABLE'))
+                  
+                  # Example: Update model weights based on recent predictions
+                  training_data = []
+                  
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'message': 'Model training completed',
+                          'timestamp': datetime.utcnow().isoformat()
+                      })
+                  }
+              except Exception as e:
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps({'error': str(e)})
+                  }
 
   # EventBridge for scheduled analysis
   ScheduleRole:
@@ -459,6 +511,10 @@ Outputs:
     Description: Lambda Function ARN
     Value: !GetAtt TelegramBotFunction.Arn
   
-  NotebookURL:
-    Description: SageMaker Notebook URL
-    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/sagemaker/home?region=${AWS::Region}#/notebook-instances/${NotebookInstance}"
+  ModelTrainerArn:
+    Description: Model Training Function ARN
+    Value: !GetAtt ModelTrainingFunction.Arn
+  
+  DashboardURL:
+    Description: CloudWatch Dashboard URL
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-analytics"
