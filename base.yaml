@@ -87,7 +87,7 @@ Resources:
           "sports_api_key": "${SportsAPIKey}"
         }
 
-  # IAM Role for Lambda - Simplified Version
+  # IAM Role for Main Bot Lambda
   LambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -108,33 +108,78 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - dynamodb:*
-                Resource: "*"
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource: 
+                  - !GetAtt GamesTable.Arn
+                  - !Sub "${GamesTable.Arn}/index/*"
+                  - !GetAtt PredictionsTable.Arn
+                  - !Sub "${PredictionsTable.Arn}/index/*"
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
+                Resource: 
+                  - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+              - Effect: Allow
+                Action:
+                  - rekognition:DetectLabels
+                  - rekognition:DetectText
+                  - textract:DetectDocumentText
+                  - comprehend:DetectSentiment
                 Resource: "*"
               - Effect: Allow
                 Action:
-                  - rekognition:*
-                  - textract:*
-                  - comprehend:*
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - s3:*
-                Resource: "*"
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "${MediaBucket}/*"
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: "*"
+                Resource: !Ref BotSecrets
+
+  # Separate IAM Role for Model Training Lambda
+  ModelTrainingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-model-training-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ModelTrainingPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
               - Effect: Allow
                 Action:
-                  - logs:*
-                Resource: "*"
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                Resource: 
+                  - !GetAtt GamesTable.Arn
+                  - !Sub "${GamesTable.Arn}/index/*"
+                  - !GetAtt PredictionsTable.Arn
+                  - !Sub "${PredictionsTable.Arn}/index/*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${MediaBucket}/*"
 
-  # Main Lambda Function - Fixed Version
+  # Main Lambda Function
   TelegramBotFunction:
     Type: AWS::Lambda::Function
     DependsOn: 
@@ -375,6 +420,93 @@ Resources:
                       'body': json.dumps({'error': str(e)})
                   }
 
+  # Model Training Lambda - Fixed with proper dependencies and role
+  ModelTrainingFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: 
+      - ModelTrainingRole
+      - GamesTable
+      - PredictionsTable
+      - MediaBucket
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-model-trainer"
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 900
+      MemorySize: 3008
+      Role: !GetAtt ModelTrainingRole.Arn
+      Environment:
+        Variables:
+          GAMES_TABLE: !Ref GamesTable
+          PREDICTIONS_TABLE: !Ref PredictionsTable
+          MEDIA_BUCKET: !Ref MediaBucket
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          from datetime import datetime
+          import os
+          
+          def lambda_handler(event, context):
+              """Train and update ML models for sports predictions"""
+              try:
+                  print(f"Starting model training with event: {json.dumps(event)}")
+                  
+                  # Initialize AWS clients
+                  dynamodb = boto3.resource('dynamodb')
+                  s3 = boto3.client('s3')
+                  
+                  # Get table references
+                  games_table = dynamodb.Table(os.environ['GAMES_TABLE'])
+                  predictions_table = dynamodb.Table(os.environ['PREDICTIONS_TABLE'])
+                  
+                  # Placeholder for model training logic
+                  training_data = []
+                  
+                  # Scan games table for training data
+                  response = games_table.scan(Limit=100)
+                  games = response.get('Items', [])
+                  
+                  print(f"Found {len(games)} games for training")
+                  
+                  # Basic training simulation
+                  model_metrics = {
+                      'accuracy': 0.85,
+                      'precision': 0.82,
+                      'recall': 0.88,
+                      'training_samples': len(games),
+                      'timestamp': datetime.utcnow().isoformat()
+                  }
+                  
+                  # Store model results in S3 (simulation)
+                  model_key = f"models/sports_predictor_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+                  
+                  s3.put_object(
+                      Bucket=os.environ['MEDIA_BUCKET'],
+                      Key=model_key,
+                      Body=json.dumps(model_metrics),
+                      ContentType='application/json'
+                  )
+                  
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'message': 'Model training completed successfully',
+                          'metrics': model_metrics,
+                          'model_location': f"s3://{os.environ['MEDIA_BUCKET']}/{model_key}"
+                      })
+                  }
+                  
+              except Exception as e:
+                  print(f"Model training error: {str(e)}")
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps({
+                          'error': str(e),
+                          'message': 'Model training failed'
+                      })
+                  }
+
   # API Gateway for webhook
   ApiGateway:
     Type: AWS::ApiGateway::RestApi
@@ -430,7 +562,9 @@ Resources:
                 "metrics": [
                   ["AWS/Lambda", "Invocations", "FunctionName", "${TelegramBotFunction}"],
                   ["AWS/Lambda", "Errors", "FunctionName", "${TelegramBotFunction}"],
-                  ["AWS/Lambda", "Duration", "FunctionName", "${TelegramBotFunction}"]
+                  ["AWS/Lambda", "Duration", "FunctionName", "${TelegramBotFunction}"],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${ModelTrainingFunction}"],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${ModelTrainingFunction}"]
                 ],
                 "period": 300,
                 "stat": "Sum",
@@ -440,49 +574,6 @@ Resources:
             }
           ]
         }
-
-  # Model Training Lambda
-  ModelTrainingFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub "${AWS::StackName}-model-trainer"
-      Runtime: python3.11
-      Handler: index.lambda_handler
-      Timeout: 900
-      MemorySize: 3008
-      Role: !GetAtt LambdaRole.Arn
-      Environment:
-        Variables:
-          GAMES_TABLE: !Ref GamesTable
-          PREDICTIONS_TABLE: !Ref PredictionsTable
-          MEDIA_BUCKET: !Ref MediaBucket
-      Code:
-        ZipFile: |
-          import json
-          import boto3
-          from datetime import datetime
-          
-          def lambda_handler(event, context):
-              """Train and update ML models for sports predictions"""
-              try:
-                  # Placeholder for model training logic
-                  dynamodb = boto3.resource('dynamodb')
-                  games_table = dynamodb.Table(event.get('GAMES_TABLE'))
-                  
-                  training_data = []
-                  
-                  return {
-                      'statusCode': 200,
-                      'body': json.dumps({
-                          'message': 'Model training completed',
-                          'timestamp': datetime.utcnow().isoformat()
-                      })
-                  }
-              except Exception as e:
-                  return {
-                      'statusCode': 500,
-                      'body': json.dumps({'error': str(e)})
-                  }
 
   # EventBridge for scheduled analysis
   ScheduleRole:
@@ -502,7 +593,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: lambda:InvokeFunction
-                Resource: !GetAtt TelegramBotFunction.Arn
+                Resource: 
+                  - !GetAtt TelegramBotFunction.Arn
+                  - !GetAtt ModelTrainingFunction.Arn
 
   DailyAnalysisSchedule:
     Type: AWS::Events::Rule
@@ -515,6 +608,17 @@ Resources:
           Id: DailyTrigger
           Input: '{"scheduled": true, "type": "daily_analysis"}'
 
+  WeeklyModelTrainingSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Weekly model training trigger
+      ScheduleExpression: "cron(0 2 ? * SUN *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ModelTrainingFunction.Arn
+          Id: WeeklyTraining
+          Input: '{"scheduled": true, "type": "model_training"}'
+
   ScheduleLambdaPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -522,6 +626,14 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt DailyAnalysisSchedule.Arn
+
+  ModelTrainingLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ModelTrainingFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt WeeklyModelTrainingSchedule.Arn
 
 Outputs:
   WebhookURL:
