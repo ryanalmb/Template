@@ -128,7 +128,7 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
-                Resource: !Sub "${MediaBucket}/*"
+                Resource: !Sub "${MediaBucket.Arn}/*"
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
