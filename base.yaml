@@ -87,7 +87,7 @@ Resources:
           "sports_api_key": "${SportsAPIKey}"
         }
 
-  # IAM Role for Lambda - Fixed Version
+  # IAM Role for Lambda - Simplified Version
   LambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -108,54 +108,31 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                Resource:
-                  - !GetAtt GamesTable.Arn
-                  - !GetAtt PredictionsTable.Arn
-                  - !Sub "${GamesTable.Arn}/index/*"
-                  - !Sub "${PredictionsTable.Arn}/index/*"
+                  - dynamodb:*
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
-                Resource: 
-                  - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
-              - Effect: Allow
-                Action:
-                  - rekognition:DetectLabels
-                  - rekognition:DetectText
-                  - rekognition:DetectFaces
                 Resource: "*"
               - Effect: Allow
                 Action:
-                  - textract:DetectDocumentText
-                  - textract:AnalyzeDocument
+                  - rekognition:*
+                  - textract:*
+                  - comprehend:*
                 Resource: "*"
               - Effect: Allow
                 Action:
-                  - comprehend:DetectSentiment
-                  - comprehend:DetectEntities
+                  - s3:*
                 Resource: "*"
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource: !Sub "${MediaBucket}/*"
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: !Ref BotSecrets
+                Resource: "*"
               - Effect: Allow
                 Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+                  - logs:*
+                Resource: "*"
 
   # Main Lambda Function - Fixed Version
   TelegramBotFunction:
